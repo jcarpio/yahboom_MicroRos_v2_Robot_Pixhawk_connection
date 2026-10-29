@@ -1,3 +1,604 @@
+# ARBOREON — Complete Raspberry Pi 5, Yahboom MicroROS V2, Pixhawk Cube Black, MAVROS and ArduDeck Integration Handover
+
+**Date:** 29 October 2026  
+**Document language:** English  
+**Audience:** Engineers reproducing the setup, diagnosing the links, and implementing a safe ArduRover-to-ROS 2 motor interface.  
+**Status at handover:** Raspberry Wi-Fi verified; ESP32-S3 micro-ROS over Wi-Fi verified; **both suspended drive wheels moved and stopped on ROS 2 command**; Yahboom encoder odometry verified; Pixhawk Cube Black ↔ MAVROS verified; MAVLink routed to **ArduDeck on MacBook, connected and receiving telemetry**. **Autonomous navigation and Pixhawk-to-wheel actuation not yet implemented.**
+
+> **Evidence conventions.** **VERIFIED** denotes a user-observed measurement, log or outcome from the session. **RECONSTRUCTED** denotes a functional example derived from the verified behavior when the exact original source is not retained here. **PROPOSED / NOT EXECUTED** denotes the next engineering step. Do not treat the earlier chronological diagnostic report (Appendix A) as the current system state: it was written *before* the breakthrough in Yahboom UDP connectivity and motor actuation.
+
+## 1. Current outcome in one page
+
+### What actually works (VERIFIED)
+
+1. Raspberry Pi 5 (8 GB), Debian Bookworm, reachable on home WLAN `WiFi-Casa` at **192.168.1.58** during the session; home Wi-Fi reconnect after reboot confirmed. DHCP address is not guaranteed permanent.
+2. Main ROS 2 Humble execution environment: Docker container **`arboreon-dev`** based on `arboreon:backup`; ROS domain **`20`**. The Raspberry host itself is **not** the ROS 2 command environment.
+3. Yahboom **MicroROS V2, two drive motors**, ESP32-S3-WROOM-1U, CP2102 attached as `/dev/ttyUSB0`. Robot Manager was used to reconfigure the V2 ESP32 from a former SSID/IP/domain to Wi-Fi UDP agent address **192.168.1.58:8090**, `ROS_DOMAIN_ID=20`. Its network address observed in UDP Agent logs: **192.168.1.54**.
+4. `arboreon-agent-udp` (micro-ROS Agent in host-network Docker) established real XRCE-DDS sessions and successfully created DDS participants and endpoints. The actual connected node is **`/micro_ros_task_node`**, not the Pi5 manual's expected `/YB_Car_Node`.
+5. Actual ESP32 subscribers: `/cmd_vel` (`geometry_msgs/msg/Twist`), `/beep` (`std_msgs/msg/UInt16`), `/cmd_ptz_angle` (`geometry_msgs/msg/Vector3`). Actual publishers: `/battery` (`std_msgs/msg/Float32`), `/imu` (`sensor_msgs/msg/Imu`), `/odom_raw` (`nav_msgs/msg/Odometry`), `/ptz_angle` (`geometry_msgs/msg/Vector3`), `/scan` (`sensor_msgs/msg/LaserScan`).
+6. Buzzer test: `/beep` data `1` sounded; data `0` stopped it. Battery reported **12.835550308227539**, believed to be volts but unit should be checked against firmware.
+7. The user executed a short `rclpy` velocity script publishing `linear.x = 0.03 m/s` for **0.5 s** at **10 Hz**, then repeatedly publishing zero for ~**2 s**. **Both suspended wheels visibly turned forward and stopped.** `/odom_raw` velocity increased during test and decayed to zero. It is not yet evidence of calibrated physical speed, directional symmetry, a tested timeout, or safe unattended operation.
+8. Cube Black attached as `/dev/ttyACM0`, connected by `ros2 launch mavros apm.launch fcu_url:=/dev/ttyACM0:115200`. ArduRover firmware **4.7.2**; MAVROS reported connected, `HOLD`, disarmed, `system_status=5` (MAV_STATE_CRITICAL), not ready for AUTO navigation. Current indoor GPS had **no fix, 0 satellites**, position `0,0` in ArduDeck.
+9. The MAVROS parameter pull succeeded: **876 ArduPilot parameters received**. Original wheel output functions are `SERVO1_FUNCTION=26` (ground steering) and `SERVO3_FUNCTION=70` (throttle). Their PWM ranges are `1100–1900 µs`, neutral `1500 µs`, reversals `0`.
+10. `/mavros_router/add_endpoint` provided a link to **ArduDeck Beta 1.1** running on MacBook **192.168.1.57**, using UDP **14550**. User explicitly confirmed **connection succeeded**, and screenshot showed live `HOLD`, `DISARMED`, heading **22°**, speed **0.0 m/s**, no GPS fix, `UDP :14550` connected.
+
+### What is NOT yet complete
+
+- No verified ROS node currently translates Cube's actual servo output `/mavros/rc/out` into Yahboom `/cmd_vel`.
+- `SERVO1_FUNCTION=73` (Throttle Left) and `SERVO3_FUNCTION=74` (Throttle Right) were **proposed but not applied**.
+- No autonomous route, `AUTO` waypoint following, `GUIDED` movement, valid position-estimation source to Pixhawk, arming, field navigation, or physical displacement test has been completed.
+- `FS_GCS_ENABLE=0`; the micro-ROS/Wi-Fi loss stop behavior is not proven. The present `FS_THR_ENABLE=1` cannot be assumed to protect the ESP32 wireless motor commands.
+- The Mac application is **ArduDeck**, not Mission Planner. It offers Mission Planning, but the route editor and mission uploading were not completed.
+
+## 2. Logical and physical architecture
+
+```text
+                                  Home access point
+                             WiFi-Casa / 192.168.1.x
+                                        |
+                 +----------------------+----------------------+
+                 |                      |                      |
+      MacBook Pro (ArduDeck)      Raspberry Pi 5         Yahboom ESP32-S3
+         192.168.1.57              192.168.1.58          192.168.1.54
+         UDP listen :14550         host Debian           UDP micro-ROS client
+                 ^                      |                 ROS_DOMAIN_ID=20
+                 |                      +-- Docker (host net) --+ 
+                 |                          |                    |
+       MAVLink over UDP           arboreon-dev             arboreon-agent-udp
+       GCS endpoint               ROS 2 Humble              UDP port 8090
+                 |                  MAVROS                         |
+                 +--- /mavros_router ---+                          |
+                                       |                          |
+                                   USB /dev/ttyACM0          DDS ROS 2 topics
+                                       |                          |
+                                 Cube Black / Rover           /cmd_vel -> ESP32
+                                    4.7.2                    /odom_raw <- ESP32
+                                  (currently HOLD)           /imu, /scan, etc.
+
+Current working motor path: ROS 2 /cmd_vel -> Agent -> ESP32 -> two motor drivers.
+Future intended path: Cube Rover servo outputs -> MAVROS /mavros/rc/out
+    -> NEW arm-gated, watchdog-protected differential bridge -> /cmd_vel.
+```
+
+**Important:** A telemetry connection to Pixhawk is **not** itself a motor-control connection. `/mavros/setpoint_velocity/cmd_vel` is not the Cube's output and should not be misrepresented as the Cube driving the Yahboom motors. The right candidate signal for a PWM-derived bridge is `/mavros/rc/out`, subject to actual output assignment and runtime validation.
+
+### Device / host mapping
+
+| Component | Observed identifier | Notes |
+|---|---|---|
+| Raspberry Pi | `pi@raspberrypi`, Wi-Fi `192.168.1.58` | Address via DHCP; confirmed for this session. |
+| MacBook Pro | `jose@Joses-MacBook-Pro`, Wi-Fi `192.168.1.57` | Command used: `ipconfig getifaddr en0`. |
+| Cube Black | `/dev/ttyACM0`, USB `2dae:1011` | MAVROS link at 115200 baud. |
+| ESP32-S3 V2 controller USB bridge | `/dev/ttyUSB0`, CP2102 `10c4:ea60` | USB device enumeration does **not** imply current micro-ROS transport is serial. |
+| ESP32 controller over Wi-Fi | `192.168.1.54` | Agent log peer address, may change by DHCP. |
+| Agent | UDP `0.0.0.0:8090` | Docker `--net=host`, domain 20. |
+| ArduDeck connection | UDP `192.168.1.57:14550` | Local receive port on Mac. |
+| MAVROS router endpoint | `udp://0.0.0.0:14555@192.168.1.57:14550` | Add as `TYPE_GCS=1`. |
+
+## 3. Reproducible setup: startup order
+
+### 3.1 Host network and persistent Wi-Fi priorities (VERIFIED/RECORDED)
+
+```bash
+# On Raspberry Pi host, NOT inside Docker:
+sudo nmcli connection modify 'WiFi-Casa' \
+  connection.autoconnect yes connection.autoconnect-priority 100
+sudo nmcli connection modify 'HUAWEI P20 Pro' \
+  connection.autoconnect yes connection.autoconnect-priority 90
+sudo nmcli connection modify 'Micro_ros' \
+  connection.autoconnect yes connection.autoconnect-priority 10
+sudo nmcli connection modify 'Huawei-Internet' connection.autoconnect no
+
+nmcli -f NAME,TYPE,AUTOCONNECT,AUTOCONNECT-PRIORITY connection show
+nmcli device status
+ip -4 addr show wlan0
+ip route
+```
+
+After reboot, the user verified that **`WiFi-Casa` connected automatically first**. Huawei fallback was *not* validated. Never publish Wi-Fi credentials in a public Git repo. Prefer a DHCP reservation for `192.168.1.58`, because ESP32 stores this Agent destination.
+
+### 3.2 Manufacturer container autostart (OBSERVED)
+
+Files on the Raspberry host:
+
+`~/.config/autostart/start.desktop`:
+
+```ini
+[Desktop Entry]
+Encoding=UTF-8
+Type=Application
+Name=myprogram
+Exec=lxterminal -e bash -c "sh /home/pi/start_agent_rpi5.sh"
+Terminal=true
+```
+
+`~/.config/autostart/uros.desktop`:
+
+```ini
+[Desktop Entry]
+Encoding=UTF-8
+Type=Application
+Name=myprogram2
+Exec=lxterminal -e bash -c "sh /home/pi/ros2_humble.sh"
+Terminal=true
+```
+
+The original `/home/pi/start_agent_rpi5.sh` starts a **serial** Agent on `/dev/ttyUSB0` at `921600`. This was **not** compatible with the *actual active* Wi-Fi configuration of the V2 board. Do not assume serial discovery means the motor controller is connected. Stop conflicting Agent instances before testing, and later clean up the autostart configuration so that only the correct intended agent is launched.
+
+Check containers:
+
+```bash
+docker ps --format 'table {{.Names}}\t{{.Status}}\t{{.Image}}'
+docker ps -a --format 'table {{.Names}}\t{{.Status}}\t{{.Image}}'
+docker start arboreon-dev   # only if stopped
+```
+
+### 3.3 Yahboom V2 Robot Manager: actual successful settings (VERIFIED)
+
+The correct controller is the older **MicroROS V2** with 2 motors, not Yahboom's different **MicroROS Pi5 X3/4-motor controller**. A **Robot Manager GUI** capable of reading/writing V2 settings successfully changed its communication details. The user observed the GUI and subsequent Agent success; the exact download location, exact button sequence, and complete exported original settings are **not captured here**. Do not invent them.
+
+| Setting | Previously observed | Successfully written / confirmed target |
+|---|---|---|
+| Wi-Fi SSID | `NOS-149D` | `WiFi-Casa` |
+| Agent/server IPv4 | `192.168.1.52` | `192.168.1.58` |
+| UDP Agent port | Not reliably retained | `8090` |
+| ROS domain | `40` | `20` |
+| Car type | `ptz` (recorded earlier) | Preserve V2 model-specific choice unless verified |
+| Servo offsets | `-5`, `0` (recorded earlier) | Preserve original calibration |
+| Motor PID | `1.80, 0.12, 0.00` (recorded earlier) | Preserve original calibration |
+| IMU PID | `2.40, 0.00, 0.16` (recorded earlier) | Preserve original calibration |
+| Motor scaling | `1, 1` (recorded earlier) | Preserve original calibration |
+| Firmware | `1.1.0` | Not reflashed |
+
+**Power trap:** flipping the board's physical OFF switch while the micro-USB is attached may **not restart the ESP32**; USB can continue supplying logic power. Thus the V2's configuration/connection state can persist across a motor-power switch cycle. Don't blindly use `KEY1` as a reset: its exact function was not verified. A deliberate power cycle/reset must account for every supply path, and should be performed only when it is safe.
+
+**Do not execute** `/home/pi/config_robot.py` directly on this V2 board. Its `__main__` block is intended for the other Pi5 robot and writes `CAR_TYPE_RPI5` and different PID/servo settings. The read-only probes of that mismatched protocol returned `None`; the Robot Manager GUI is what worked.
+
+### 3.4 Start the correct micro-ROS UDP Agent (VERIFIED command)
+
+From Raspberry **host**:
+
+```bash
+# Stop/remove only if this exact named test container is already running.
+docker ps --format '{{.Names}} {{.Image}}'
+
+# Start once (do not run twice with the same name/UDP port):
+docker run -d --rm \
+  --name arboreon-agent-udp \
+  --net=host \
+  -e ROS_DOMAIN_ID=20 \
+  microros/micro-ros-agent:humble \
+  udp4 --port 8090 -v4
+
+docker logs -f arboreon-agent-udp
+```
+
+Logs **after V2 configuration succeeded** showed `create_client`, a **session established from `192.168.1.54`**, then `create_participant` and entities corresponding to publishers, subscriptions and data readers. This is the important difference from the earlier unsuccessful serial and UDP tests. A session reestablishment was observed ~70 s later; intermittent reconnect should be investigated, not ignored, before field use.
+
+If the name already exists, do not create a second instance. A deliberate restart when required:
+
+```bash
+docker stop arboreon-agent-udp
+# Then run the docker run command above again.
+```
+
+### 3.5 ROS2 environment and topic checks (VERIFIED)
+
+**On the Pi host**, use `docker exec`; `ros2` is installed *inside* `arboreon-dev`:
+
+```bash
+docker exec arboreon-dev bash -lc '
+  source /opt/ros/humble/setup.bash
+  export ROS_DOMAIN_ID=20
+  ros2 node list
+  ros2 node info /micro_ros_task_node
+  ros2 topic info /cmd_vel -v
+  ros2 topic list
+'
+```
+
+Actual V2 node and topics at success:
+
+```text
+/micro_ros_task_node
+  Subscribers:
+    /beep            std_msgs/msg/UInt16
+    /cmd_ptz_angle   geometry_msgs/msg/Vector3
+    /cmd_vel         geometry_msgs/msg/Twist
+  Publishers:
+    /battery         std_msgs/msg/Float32
+    /imu             sensor_msgs/msg/Imu
+    /odom_raw        nav_msgs/msg/Odometry
+    /ptz_angle       geometry_msgs/msg/Vector3
+    /scan            sensor_msgs/msg/LaserScan
+```
+
+Earlier `ros2 topic info /cmd_vel -v` showed only `joy_ctrl` as publisher and **zero subscribers**; after successful micro-ROS session the ESP32 was confirmed as the subscriber. Be mindful that the preinstalled joystick is also a publisher on `/cmd_vel`; do not allow joystick commands to compete with a future Pixhawk bridge.
+
+The `/cmd_vel` subscriber QoS was **BEST_EFFORT**. A `rclpy` publisher with the usual reliable profile still successfully drove the motor node in this session. Check actual QoS and topic endpoint discovery when troubleshooting.
+
+### 3.6 Safe connectivity test: buzzer and telemetry (VERIFIED behavior)
+
+```bash
+docker exec arboreon-dev bash -lc '
+  source /opt/ros/humble/setup.bash
+  export ROS_DOMAIN_ID=20
+  ros2 topic pub --once /beep std_msgs/msg/UInt16 "{data: 1}"
+  ros2 topic pub --once /beep std_msgs/msg/UInt16 "{data: 0}"
+'
+```
+
+The buzzer started/stopped accordingly. The board published `/battery` = `12.835550308227539` (unit likely volts; verify firmware), and credible `/odom_raw` velocity. Example checks:
+
+```bash
+docker exec arboreon-dev bash -lc '
+  source /opt/ros/humble/setup.bash
+  export ROS_DOMAIN_ID=20
+  ros2 topic echo /battery --once
+  ros2 topic echo /odom_raw --once
+  ros2 topic hz /odom_raw
+'
+```
+
+### 3.7 The FIRST MOTOR MOVEMENT: test script
+
+**VERIFIED parameters and result:** The user ran a Python 3 `rclpy` script from `/tmp/test_motors.py` inside `arboreon-dev`: `Twist.linear.x=0.03` for ~0.5 seconds, publishing at 10 Hz after ~2 seconds for ROS endpoint discovery; then zero for ~2 seconds. Both suspended wheels turned forward and stopped. `/odom_raw` showed measured `twist.twist.linear.x` roughly `0.00281`, `0.00331`, `0.00475`, `0.00113` m/s during/near the pulse and angular residual up to about `+0.05544 rad/s`; after stop it decayed close to numerical zero. No wheel-ground calibration can be deduced from a half-second airborne test.
+
+**RECONSTRUCTED, self-contained equivalent** of that script (the precise bytes of the original file were not preserved in the available conversation record). Save on Pi host as `~/test_motors.py`:
+
+```python
+#!/usr/bin/env python3
+"""Bench-only ROS 2 test for Yahboom V2. Wheels suspended, cutter disconnected."""
+import time
+import rclpy
+from geometry_msgs.msg import Twist
+
+TOPIC = '/cmd_vel'
+SPEED_M_S = 0.03
+PULSE_S = 0.5
+RATE_HZ = 10.0
+DISCOVERY_S = 2.0
+STOP_REPEAT_S = 2.0
+
+
+def main():
+    rclpy.init()
+    node = rclpy.create_node('arboreon_bench_motor_test')
+    pub = node.create_publisher(Twist, TOPIC, 10)
+    period = 1.0 / RATE_HZ
+    try:
+        # Allow DDS endpoints / micro-ROS graph to discover this publisher.
+        t0 = time.monotonic()
+        while time.monotonic() - t0 < DISCOVERY_S:
+            rclpy.spin_once(node, timeout_sec=0.05)
+
+        # Brief forward wheel command.
+        deadline = time.monotonic() + PULSE_S
+        while time.monotonic() < deadline:
+            msg = Twist()
+            msg.linear.x = SPEED_M_S
+            pub.publish(msg)
+            rclpy.spin_once(node, timeout_sec=0.0)
+            time.sleep(period)
+    finally:
+        # Repeated zero commands make normal stop observable, but do NOT
+        # substitute for an independently validated watchdog/power cutoff.
+        deadline = time.monotonic() + STOP_REPEAT_S
+        while time.monotonic() < deadline:
+            pub.publish(Twist())
+            rclpy.spin_once(node, timeout_sec=0.0)
+            time.sleep(period)
+        node.destroy_node()
+        rclpy.shutdown()
+
+
+if __name__ == '__main__':
+    main()
+```
+
+Copy and execute using the **verified command structure**:
+
+```bash
+# Pi host, not Mac:
+docker cp ~/test_motors.py arboreon-dev:/tmp/test_motors.py
+
+docker exec arboreon-dev bash -lc '
+source /opt/ros/humble/setup.bash
+export ROS_DOMAIN_ID=20
+python3 /tmp/test_motors.py
+'
+```
+
+**Safety limitation:** if Wi-Fi fails after a nonzero message, publishing zero in `finally` may not reach the ESP32. This is a bench demonstration, not an acceptable production emergency stop. Do not enable a cutter; do not put wheels on the ground before independent software/hardware protections are tested.
+
+## 4. Cube Black ↔ MAVROS ↔ ArduDeck: exact procedure
+
+### 4.1 Start and inspect MAVROS (VERIFIED)
+
+```bash
+# Pi host, interactive shell 1; leave this running:
+docker exec -it arboreon-dev bash
+source /opt/ros/humble/setup.bash
+export ROS_DOMAIN_ID=20
+ros2 launch mavros apm.launch fcu_url:=/dev/ttyACM0:115200
+```
+
+MAVROS logged `CON: Got HEARTBEAT, connected` / ArduPilot; controller ArduRover **4.7.2**. A second Pi SSH terminal can query:
+
+```bash
+docker exec arboreon-dev bash -lc '
+source /opt/ros/humble/setup.bash
+export ROS_DOMAIN_ID=20
+ros2 topic echo /mavros/state --once
+ros2 topic echo /mavros/rc/out --once
+'
+```
+
+Observed state:
+
+```yaml
+connected: true
+armed: false
+guided: false
+manual_input: false
+mode: HOLD
+system_status: 5
+```
+
+Observed `rc/out` while disarmed had channel 1 `1500`, channel 2 `0`, channel 3 `1500`, rest `0`. This is a **neutral output observation**, not proof that the Cube is configured for independent wheel drive. Without an RC receiver, `/mavros/manual_control/control --once` may wait indefinitely; the lack of RC input is not in itself a requirement for an autonomous Rover, but arming/failsafe configuration still needs investigation.
+
+`/mavros/imu/data_raw` and `/imu/data` were observed after requesting MAVLink `RAW_IMU` (message ID 27) and `ATTITUDE` (ID 30) at intervals of 50,000 µs (~20 Hz); the precise commands that set those intervals are not preserved here, so do not claim an exact invocation. Indoor GPS remained invalid. A 15-second `timeout ros2 topic echo /mavros/statustext/recv` produced an `ExternalShutdownException` when SIGTERM ended the CLI; this by itself is **not** proof of MAVROS failure.
+
+### 4.2 Pull/read 876 flight-controller parameters (VERIFIED)
+
+```bash
+docker exec arboreon-dev bash -lc '
+source /opt/ros/humble/setup.bash
+export ROS_DOMAIN_ID=20
+ros2 service list -t | grep /mavros/param
+ros2 service call /mavros/param/pull \
+  mavros_msgs/srv/ParamPull "{force_pull: true}"
+'
+```
+
+**Actual response:**
+
+```text
+mavros_msgs.srv.ParamPull_Response(success=True, param_received=876)
+```
+
+Read-only parameter inspection:
+
+```bash
+docker exec arboreon-dev bash -lc '
+source /opt/ros/humble/setup.bash
+export ROS_DOMAIN_ID=20
+for p in \
+  SERVO1_FUNCTION SERVO3_FUNCTION \
+  SERVO1_MIN SERVO1_TRIM SERVO1_MAX SERVO1_REVERSED \
+  SERVO3_MIN SERVO3_TRIM SERVO3_MAX SERVO3_REVERSED \
+  FRAME_CLASS FRAME_TYPE MOT_SKID_FRIC MOT_THR_MIN MOT_THR_MAX \
+  FS_THR_ENABLE FS_GCS_ENABLE ARMING_REQUIRE ARMING_CHECK; do
+  echo "===== $p ====="
+  ros2 param get /mavros/param "$p"
+done
+'
+```
+
+**Observed values (do not overwrite before backup):**
+
+| Parameter | Value | Interpretation / important caveat |
+|---|---:|---|
+| `SERVO1_FUNCTION` | `26` | Ground steering; **not** differential-left motor yet. |
+| `SERVO3_FUNCTION` | `70` | General throttle; **not** differential-right motor yet. |
+| `SERVO1_MIN / TRIM / MAX` | `1100 / 1500 / 1900` | Microseconds. |
+| `SERVO3_MIN / TRIM / MAX` | `1100 / 1500 / 1900` | Microseconds. |
+| `SERVO1_REVERSED` | `0` | No reversal. |
+| `SERVO3_REVERSED` | `0` | No reversal. |
+| `FRAME_CLASS` | `1` | Class setting as observed; verify meaning against this firmware's metadata. |
+| `FRAME_TYPE` | `0` | Frame setting as observed; verify meaning against firmware. |
+| `MOT_SKID_FRIC` | `Parameter not set` | Not found; not evidence of a malfunction. |
+| `MOT_THR_MIN` | `0` | Configured minimum throttle. |
+| `MOT_THR_MAX` | `100` | Configured throttle limit. |
+| `FS_THR_ENABLE` | `1` | Throttle failsafe enabled, but **does not guarantee** stop on ROS/Wi-Fi failure. |
+| `FS_GCS_ENABLE` | `0` | GCS failsafe disabled; evaluate before autonomous operation. |
+| `ARMING_REQUIRE` | `1` | Arming required. |
+| `ARMING_CHECK` | `Parameter not set` | Do **not** infer that safety checks were disabled. |
+
+**PROPOSED / NOT EXECUTED:** assign `SERVO1_FUNCTION=73` (Throttle Left) and `SERVO3_FUNCTION=74` (Throttle Right) for ArduRover skid steering **after exporting the original parameter set and checking wiring/output semantics**. No parameter write command was executed in the captured session. Do not turn off arming checks just to make the bench demonstration run.
+
+### 4.3 Discover MAVLink router service (VERIFIED)
+
+```bash
+docker exec arboreon-dev bash -lc '
+source /opt/ros/humble/setup.bash
+export ROS_DOMAIN_ID=20
+ros2 node info /mavros_router
+ros2 interface show mavros_msgs/srv/EndpointAdd
+'
+```
+
+Observed router interfaces:
+
+```text
+/mavros_router/add_endpoint [mavros_msgs/srv/EndpointAdd]
+/mavros_router/del_endpoint [mavros_msgs/srv/EndpointDel]
+/uas1/mavlink_sink   (subscriber)
+/uas1/mavlink_source (publisher)
+```
+
+Exact verified `EndpointAdd` service definition:
+
+```text
+uint8 TYPE_FCU = 0
+uint8 TYPE_GCS = 1
+uint8 TYPE_UAS = 2
+string url
+uint8 type
+---
+bool successful
+string reason
+uint32 id
+```
+
+### 4.4 Configure Mac and bridge MAVLink UDP (VERIFIED CONNECTIVITY)
+
+On **MacBook**:
+
+```bash
+ipconfig getifaddr en0
+# Observed: 192.168.1.57
+```
+
+On **Raspberry host**:
+
+```bash
+docker exec arboreon-dev bash -lc '
+source /opt/ros/humble/setup.bash
+export ROS_DOMAIN_ID=20
+ros2 service call /mavros_router/add_endpoint \
+  mavros_msgs/srv/EndpointAdd \
+  "{url: '\''udp://0.0.0.0:14555@192.168.1.57:14550'\'', type: 1}"
+'
+```
+
+**IMPORTANT evidence distinction:** The exact `add_endpoint` service response (`successful`, `reason`, `id`) was **not pasted** in the captured conversation, but **the user confirmed “ha conectado!!”** and an ArduDeck screenshot showed live MAVLink connection and FCU status. Therefore the end-to-end route is verified from the UI, though the exact endpoint ID was not retained. Do not blindly add duplicate endpoints. If restarting MAVROS, verify whether the dynamic endpoint persists (often not), then add it once if necessary.
+
+**ArduDeck Beta 1.1 (Mac) configuration actually used:**
+
+| UI control | Value |
+|---|---|
+| Vehicle family | **ArduPilot** (not the default PX4 choice). |
+| Transport | **UDP**. |
+| Mode | **Listen (Server)**, *not* `Client (Connect)`. |
+| Local Port | **14550**. |
+| Protocol | **MAVLink**. |
+| Connect | Click after starting/enabling the router endpoint. |
+
+In Client (Connect) view, `192.168.1.1` appeared as a default host; this is the **home router/gateway**, not the Raspberry or Cube. The working layout listens for the Raspberry's outgoing MAVLink stream.
+
+**Final screenshot evidence:** Green `UDP :14550`; `HOLD`; `DISARMED`; heading `22°`; speed `0.0 m/s`; throttle `0%`; GPS `No Fix`, satellites `0`; HDOP/VDOP `100.0`; position latitude `0.000000°`, longitude `0.000000°`; altitude display approximately `-5m` (not valid navigational altitude with no GPS fix). The map's displayed satellite imagery was **not** proof of vehicle location. The UI exposed **Mission Planning** via Quick Launch and a map/planning icon.
+
+## 5. Attempting a tiny Mission Planning route: why it stopped here
+
+The operator intended a route of only a few **centimeters**, with wheels safely suspended. This is an appropriate early *command-chain bench test*, but **not a meaningful standalone GPS waypoint navigation test**:
+
+1. Cube had **no GPS fix**, no valid latitude/longitude. A mission can be edited or uploaded, but autonomous `AUTO` waypoint tracking cannot reliably operate without a compatible valid position estimate.
+2. Consumer GPS accuracy is far coarser than a few centimeters. For precise centimeters, establish a trusted local navigation source (encoder/IMU odometry and appropriate EKF integration, potentially RTK GNSS outdoors).
+3. Yahboom publishes `/odom_raw` in ROS 2, but it was **not** being fused/injected into ArduPilot's navigation estimator. A free-spinning suspended wheel does not equal real-world displacement.
+4. Pixhawk did **not** drive `/cmd_vel`; the crucial servo-PWM-to-Twist bridge did not exist yet.
+5. Pixhawk was `DISARMED`, `HOLD`, and status `5` (**CRITICAL**). Arming/prearm issues remained unresolved.
+
+**What was done:** ArduDeck connection, FCU telemetry inspection, read-only parameter analysis, discovery of Mission Planning entry point. **What was NOT done:** Mission Planner installation, actual waypoint creation/upload, `AUTO` execution, Pixhawk-led motor movement, route completion.
+
+## 6. Engineering plan to resume with minimum repetition
+
+### Stage A — preserve this working communication chain
+
+1. Verify Wi-Fi IPs (Mac `192.168.1.57`, Pi `192.168.1.58`, V2 ESP32 peer `192.168.1.54` at the time). Consider DHCP reservations; don't hard-code unvalidated addresses in future field deployments.
+2. Confirm `arboreon-dev`, UDP Agent and MAVROS are running, domain 20. Ensure only **one** Agent owns UDP port 8090 and only **one** process owns `/dev/ttyACM0`.
+3. From ROS 2 inspect `/micro_ros_task_node` publishers/subscribers and `/mavros/state`; confirm agent logs show a real client session.
+4. Keep the cutter disconnected, wheels suspended, independent 12 V motor cutoff accessible.
+5. Connect ArduDeck using UDP Listen 14550 and, if needed, add the MAVROS GCS endpoint *once*.
+
+### Stage B — back up and configure the Rover outputs (PROPOSED)
+
+1. Export ArduPilot parameter set using a supported MAVLink tool / GCS before changing any function. Record `SERVO1_FUNCTION=26`, `SERVO3_FUNCTION=70`, PWM ranges, reversals and all failsafe values.
+2. Review ArduRover 4.7.2 official motor output documentation. Candidate for differential robot: 73 left, 74 right. Set through GCS only after confirming mappings.
+3. With Pixhawk disarmed, log `/mavros/rc/out` neutrals; separately diagnose prearm status and verify RC/GCS failsafes, GPS/EKF and intended mode. Do not defeat safety checks to get an armable flag.
+
+### Stage C — read-only differential output interpreter (PROPOSED)
+
+The intended bridge converts two PWM outputs into chassis velocity after measurement and calibration:
+
+```text
+u_left  = clamp((PWM_left  - 1500) / 400, -1, +1)
+u_right = clamp((PWM_right - 1500) / 400, -1, +1)
+v_left  = Vmax * u_left
+v_right = Vmax * u_right
+linear.x  = (v_right + v_left) / 2
+angular.z = (v_right - v_left) / wheel_separation
+```
+
+This is an **illustrative symmetric first-order model**, not calibration. `wheel_separation`, motor inversion, dead zone, physical top speeds and the real mapping of `/mavros/rc/out.channels[]` require empirical validation. Neutral is 1500 µs according to the parameters; do not derive movements from `0` PWM values on inactive channels. Prefer logging-only mode first; require a fresh valid MAVROS state message and `armed == true` before **any** nonzero motor command. `HOLD` should yield zeros. Route execution should additionally require an appropriate autonomous mode and valid position source.
+
+### Stage D — controlled bench movement, if and only if gated bridge is verified (PROPOSED)
+
+- Independent emergency stop and hardware power cutoff.
+- No competing `/cmd_vel` publishers (`joy_ctrl` may exist) or explicit arbitration; one selected command source.
+- Bounds for speed and yaw, explicit deadband, soft-start/rate limiting, saturation and inversion tests.
+- Stop on stale PWM, missing MAVROS state, disarm, HOLD, ROS process death and lost Wi-Fi/ESP32 agent. **Software stop messages alone are not an independent failsafe:** validate ESP32-side command timeout or hardware motor enable cutoff.
+- Separate supervised tests: left-forward, right-forward, both-forward, reverse, yaw rotation, neutral, loss of connection, disarm.
+- Compare encoder odometry against measured ground motion only after safe ground tests; suspended wheels do not provide distance-traveled ground truth.
+
+### Stage E — navigation (PROPOSED)
+
+- Start with heading and local velocity commands; then integrate a trusted position/heading estimate into ArduPilot's EKF (VIO/odometry via supported MAVLink message path or outdoor GNSS/RTK as appropriate).
+- Inspect prearm failures (`MAV_STATUSTEXT` in GCS, ArduPilot prearm messages); verify GPS/EKF status and modes.
+- For true centimeter trajectories, build a local ROS2 path controller or external-navigation integration, instead of assuming an ordinary outdoor GPS waypoint spacing of centimeters will work.
+- Only then upload a test mission using ArduDeck's Mission Planning and execute `AUTO` in controlled surroundings with tested stopping mechanisms.
+
+## 7. Troubleshooting matrix
+
+| Symptom | Likely explanation | Diagnostic / remedy |
+|---|---|---|
+| `ros2` not found on Raspberry | ROS 2 runs inside Docker | `docker exec arboreon-dev bash -lc 'source /opt/ros/humble/setup.bash; export ROS_DOMAIN_ID=20; ros2 node list'` |
+| `/cmd_vel` has 0 subscribers | ESP32 XRCE client did not connect, or domain mismatch | Check UDP Agent logs, V2 SSID/agent IP, ROS domain and `/micro_ros_task_node`. |
+| CP2102 `/dev/ttyUSB0` exists but Agent has no client | V2 uses **Wi-Fi UDP**, not Pi5 default serial Agent | Use `udp4 --port 8090`; avoid treating USB enumeration as serial transport proof. |
+| `config_robot.py` reads `None` | Wrong controller/protocol or no configuration window | Prefer V2-compatible Robot Manager; do **not** run Pi5 script main. |
+| OFF switch fails to reboot ESP32 | USB back-power still present | Account for micro-USB power; investigate correct reset procedure. |
+| `docker exec` fails on Mac | Wrong machine has no Raspberry containers | SSH to Pi then `docker exec`. |
+| `bash: pi@raspberrypi:~: command not found` | Shell prompt copied as literal command | Copy only command text, not prompt. |
+| `/mavros/manual_control/control --once` hangs | No RC input arriving | Doesn't by itself invalidate autopilot telemetry; do not rely on manual input topics. |
+| `ARMING_CHECK: Parameter not set` | This named parameter absent in returned ROS parameter tree | Check firmware's param metadata; do not presume checks off. |
+| ArduDeck connects but no GPS | Indoor Cube receives no fix | No AUTO waypoint test yet. |
+| ArduDeck has heartbeat wait message | Wrong UDP mode/port, missing router endpoint, link not established | Listen Server port 14550, ArduPilot, verify router endpoint and MAVROS heartbeat. |
+| Two ROS nodes publish `/cmd_vel` | Manufacturer `joy_ctrl` plus custom control | Build arbiter/stop competing publisher before enabling autopilot bridge. |
+| `ExternalShutdownException` after `timeout ... echo` | `timeout` intentionally sends SIGTERM | Not proof of FCU connection loss. |
+
+## 8. Command cheat sheet: one-copy diagnostic collection
+
+From Raspberry host with `arboreon-dev` and MAVROS already running:
+
+```bash
+printf '\n=== Host IP/routes ===\n'
+ip -4 addr show wlan0
+ip route
+printf '\n=== Docker ===\n'
+docker ps --format 'table {{.Names}}\t{{.Status}}\t{{.Image}}'
+printf '\n=== UDP Agent tail ===\n'
+docker logs --tail 25 arboreon-agent-udp
+printf '\n=== ROS/MAVROS graph ===\n'
+docker exec arboreon-dev bash -lc '
+source /opt/ros/humble/setup.bash
+export ROS_DOMAIN_ID=20
+ros2 node info /micro_ros_task_node
+ros2 topic info /cmd_vel -v
+ros2 topic echo /mavros/state --once
+ros2 topic echo /mavros/rc/out --once
+'
+```
+
+**Run the above only when MAVROS is active.** Some `--once` commands can wait indefinitely if their publisher is missing; use `Ctrl+C` or a controlled timeout where appropriate. Never paste `pi@raspberrypi:~ $` or a Markdown shell prompt as part of the command.
+
+## 9. Links and references
+
+- Yahboom Pi5 study manual (different hardware variant; do not apply its controller configuration uncritically): https://www.yahboom.net/study/MicroROS-Pi5
+- Yahboom MicroROS V2 documentation: https://www.yahboom.net/study/MicroROS-V2
+- ROS 2 Humble: https://docs.ros.org/en/humble/
+- micro-ROS Agent source: https://github.com/micro-ROS/micro-ROS-Agent
+- MAVROS: https://github.com/mavlink/mavros
+- ArduPilot Rover documentation: https://ardupilot.org/rover/
+- ArduPilot servo function reference: https://ardupilot.org/rover/docs/common-rcoutput-mapping.html
+
+Where a URL is provided as a reference, verify the current page and firmware-specific values before implementation. This handover is primarily a record of actual session commands and observations, not proof that every external reference was consulted during the session.
+
+---
+
+## Appendix A — Earlier detailed troubleshooting report (historical, **superseded status**)
+
+The following earlier report was saved before the successful Robot Manager Wi-Fi reconfiguration, motor test, and ArduDeck connection. It is preserved **verbatim** for historical commands and diagnostic reasoning. Statements like “Agent not connected” and “motors not tested” in this appendix describe an **earlier point in time** and are now superseded by Sections 1–8 above.
+
 # ARBOREON — Raspberry Pi 5 Connectivity and Pixhawk–Yahboom Integration
 
 **Technical configuration record and troubleshooting handover**  
