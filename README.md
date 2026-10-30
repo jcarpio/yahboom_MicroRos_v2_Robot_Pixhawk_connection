@@ -7,17 +7,24 @@
 
 > **Evidence conventions.** **VERIFIED** denotes a user-observed measurement, log or outcome from the session. **RECONSTRUCTED** denotes a functional example derived from the verified behavior when the exact original source is not retained here. **PROPOSED / NOT EXECUTED** denotes the next engineering step. Do not treat the earlier chronological diagnostic report (Appendix A) as the current system state: it was written *before* the breakthrough in Yahboom UDP connectivity and motor actuation.
 
-### MAVROS RC Control and Failsafe Investigation
+## Updates
 
-The second phase of the ARBOREON project focuses on establishing reliable communication and control between the Raspberry Pi 5, MAVROS, and the Pixhawk Cube Black running ArduRover 4.7.2.
+### 2026-10-30 — MAVROS RC Control and Failsafe Investigation
 
-This investigation documents the identification and resolution of a MAVLink System ID mismatch, successful RC channel overrides, radio failsafe recovery, and transitions between HOLD and MANUAL modes.
+A major milestone in the ARBOREON project: successful integration of MAVLink-based virtual RC control between the Raspberry Pi 5, MAVROS, and the Pixhawk Cube Black running ArduRover 4.7.2.
 
-The report includes a detailed chronology of experiments, observed results, troubleshooting procedures, and reproducible Python and ROS 2 scripts. It also identifies remaining safety requirements before enabling differential motor control.
+**Key achievements:**
+- Resolved a MAVLink System ID mismatch (SYSID 1 → 254).
+- Successfully transmitted and validated virtual RC channel overrides.
+- Confirmed radio failsafe recovery using continuous RC commands.
+- Achieved HOLD → MANUAL transitions and observed automatic return to HOLD after RC signal loss.
+- Verified neutral motor outputs and documented remaining safety requirements.
 
-**Technical report:** [ARBOREON — MAVROS RC Control and Failsafe Investigation](ARBOREON_MAVROS_RC_Failsafe_Investigation_2026-10-29_EN.md)
+The complete investigation includes experimental results, troubleshooting steps, and reproducible Python and ROS 2 scripts.
 
-**Current milestone:** MAVLink communication, virtual RC control, failsafe recovery, and mode transitions verified. Differential PWM actuation and physical motor control remain pending validation.
+**[Read the full technical report →](ARBOREON_MAVROS_RC_Failsafe_Investigation_2026-10-29_EN.md)**
+
+**Next milestone:** Validate differential PWM outputs and supervised motor actuation with the Yahboom MicroROS V2 platform.
 
 ## 1. Current outcome in one page
 
