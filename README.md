@@ -7,6 +7,18 @@
 
 > **Evidence conventions.** **VERIFIED** denotes a user-observed measurement, log or outcome from the session. **RECONSTRUCTED** denotes a functional example derived from the verified behavior when the exact original source is not retained here. **PROPOSED / NOT EXECUTED** denotes the next engineering step. Do not treat the earlier chronological diagnostic report (Appendix A) as the current system state: it was written *before* the breakthrough in Yahboom UDP connectivity and motor actuation.
 
+### MAVROS RC Control and Failsafe Investigation
+
+The second phase of the ARBOREON project focuses on establishing reliable communication and control between the Raspberry Pi 5, MAVROS, and the Pixhawk Cube Black running ArduRover 4.7.2.
+
+This investigation documents the identification and resolution of a MAVLink System ID mismatch, successful RC channel overrides, radio failsafe recovery, and transitions between HOLD and MANUAL modes.
+
+The report includes a detailed chronology of experiments, observed results, troubleshooting procedures, and reproducible Python and ROS 2 scripts. It also identifies remaining safety requirements before enabling differential motor control.
+
+**Technical report:** [ARBOREON — MAVROS RC Control and Failsafe Investigation](ARBOREON_MAVROS_RC_Failsafe_Investigation_2026-10-29_EN.md)
+
+**Current milestone:** MAVLink communication, virtual RC control, failsafe recovery, and mode transitions verified. Differential PWM actuation and physical motor control remain pending validation.
+
 ## 1. Current outcome in one page
 
 ### What actually works (VERIFIED)
