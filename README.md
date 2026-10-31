@@ -9,6 +9,11 @@
 
 ## Updates
 
+
+### 2026-10-31 — MicroRos V2 Agent Raspberry Pi 5 and Ubuntu MacOS MicroRos Migration notes 
+
+**[Read Migration notes →](microros_v2_agent_migration_note.md)**
+
 ### 2026-10-30 — MAVROS RC Control and Failsafe Investigation
 
 A major milestone in the ARBOREON project: successful integration of MAVLink-based virtual RC control between the Raspberry Pi 5, MAVROS, and the Pixhawk Cube Black running ArduRover 4.7.2.
