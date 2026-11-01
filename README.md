@@ -10,7 +10,7 @@
 ## Updates
 
 
-### 2026-11-01 — Cable-Free Motor Integration: ArduPilot Cube Black + RFD868x + Yahboom MicroROS V2 over ROS 2 without Raspberry Pi
+### 2026-11-01 — Extension 02 — Autonomous Mission Mode (AUTO): Cube Black → RFD868x → ROS 2 → Yahboom MicroROS V2
 
 **[Read document →](MISSION_AUTO_LIDAR_NEXT_STEPS.md)**
 
