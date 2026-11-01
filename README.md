@@ -1,4 +1,4 @@
-# ARBOREON — Complete Raspberry Pi 5, Yahboom MicroROS V2, Pixhawk Cube Black, MAVROS and ArduDeck Integration Handover
+# ARBOREON — Complete Yahboom MicroROS V2, Pixhawk Cube Black, MAVROS and ArduDeck Integration Handover with and without Raspberri Pi
 
 **Date:** 29 October 2026  
 **Document language:** English  
