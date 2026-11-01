@@ -9,7 +9,7 @@
 
 ## Updates
 
-### 2026-11-01 — Cable-Free Motor Integration: ArduPilot Cube Black + RFD868x + Yahboom MicroROS V2 over ROS 2 
+### 2026-11-01 — Cable-Free Motor Integration: ArduPilot Cube Black + RFD868x + Yahboom MicroROS V2 over ROS 2 without Raspberry Pi
 
 **[Read document →](MicroRos_V2_Pixhawk_connection_without_Raspberry_Pi.md)**
 
