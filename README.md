@@ -9,7 +9,7 @@
 
 ## Updates
 
-### 2026-10-31 — MicroRos V2 Agent Raspberry Pi 5 and Ubuntu MacOS MicroRos Migration notes 
+### 2026-11-01 — Cable-Free Motor Integration: ArduPilot Cube Black + RFD868x + Yahboom MicroROS V2 over ROS 2 
 
 **[Read Migration notes →](MicroRos_V2_Pixhawk_connection_without_Raspberry_Pi.md)**
 
