@@ -167,6 +167,14 @@ The six navigation/speed parameters above were **requested but their live values
 ---
 
 ## Updates
+
+
+### 2026-11-01 — HuggingFace UTM Ubuntu 22.04 Arm64 Image
+
+**[Go to HuggingFace →](https://huggingface.co/datasets/enkire/Autonomous-Yahboom-MicroROS-V2-Ubuntu-22.04-ARM64-UTM)**
+
+
+
 ### 2026-11-01 — Quick Start: Autonomous Mission with Pixhawk Cube Black and Yahboom MicroROS V2 (No Raspberry Pi)
 
 **[Read document →](Quick_Start_Autonomous_Mission_with_Pixhawk_Cube_Black_and_Yahboom_MicroROS_V2_No_Raspberry_Pi.md)**
