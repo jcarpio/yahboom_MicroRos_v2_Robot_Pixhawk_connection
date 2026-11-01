@@ -1,4 +1,4 @@
-# Cable-Free Motor Integration: ArduPilot Cube Black + RFD868x + Yahboom MicroROS V2 over ROS 2
+# Cable-Free Motor Integration: ArduPilot Cube Black + RFD868x + Yahboom MicroROS V2 over ROS 2 without Raspberry Pi
 
 **From an adapted Ubuntu-on-UTM image on a Mac to keyboard-controlled differential-drive wheels — without a Raspberry Pi and without motor-control wiring between the Pixhawk and the Yahboom board**
 
