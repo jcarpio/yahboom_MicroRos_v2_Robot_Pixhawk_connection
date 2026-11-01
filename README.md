@@ -9,6 +9,10 @@
 
 ## Updates
 
+### 2026-10-31 — MicroRos V2 Agent Raspberry Pi 5 and Ubuntu MacOS MicroRos Migration notes 
+
+**[Read Migration notes →](MicroRos_V2_Pixhawk_connection_without_Raspberry_Pi.md)**
+
 
 ### 2026-10-31 — MicroRos V2 Agent Raspberry Pi 5 and Ubuntu MacOS MicroRos Migration notes 
 
