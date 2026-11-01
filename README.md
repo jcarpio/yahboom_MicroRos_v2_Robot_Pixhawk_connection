@@ -1,11 +1,170 @@
-# ARBOREON — Complete Yahboom MicroROS V2, Pixhawk Cube Black, MAVROS and ArduDeck Integration Handover with and without Raspberri Pi
+# ARBOREON — Complete Yahboom MicroROS V2, Pixhawk Cube Black, MAVROS and ArduDeck Integration Handover with and without Raspberry Pi
 
-**Date:** 29 October 2026  
+**Original handover:** 29 October 2026  
+**Latest confirmed update:** 1 November 2026  
 **Document language:** English  
 **Audience:** Engineers reproducing the setup, diagnosing the links, and implementing a safe ArduRover-to-ROS 2 motor interface.  
-**Status at handover:** Raspberry Wi-Fi verified; ESP32-S3 micro-ROS over Wi-Fi verified; **both suspended drive wheels moved and stopped on ROS 2 command**; Yahboom encoder odometry verified; Pixhawk Cube Black ↔ MAVROS verified; MAVLink routed to **ArduDeck on MacBook, connected and receiving telemetry**. **Autonomous navigation and Pixhawk-to-wheel actuation not yet implemented.**
+**Current status (1 November 2026):** Two separate integrations have been tested. The original Raspberry Pi 5 + MAVROS environment remains documented below as historical work. More recently, **Ubuntu 22.04 ARM64 on Mac/UTM, with no Raspberry Pi connected**, ran micro-ROS (domain 40), MAVProxy over an RFD868x telemetry link, and a Python MAVLink-to-ROS 2 bridge. **Both suspended Yahboom MicroROS V2 wheels were driven forward, steered, and stopped from Pixhawk outputs; the bridge also accepted ArduRover AUTO outputs during an uploaded waypoint mission.** ArduDeck displayed the mission running and waypoint progress. **Actual ground travel to waypoints has NOT yet been verified**; LiDAR avoidance, independent emergency stop, and ESP32-side command timeout remain open tasks.
 
-> **Evidence conventions.** **VERIFIED** denotes a user-observed measurement, log or outcome from the session. **RECONSTRUCTED** denotes a functional example derived from the verified behavior when the exact original source is not retained here. **PROPOSED / NOT EXECUTED** denotes the next engineering step. Do not treat the earlier chronological diagnostic report (Appendix A) as the current system state: it was written *before* the breakthrough in Yahboom UDP connectivity and motor actuation.
+> **Evidence conventions.** **VERIFIED** denotes a user-observed measurement, log or outcome from the session. **RECONSTRUCTED** denotes a functional example derived from the verified behavior when the exact original source is not retained here. **PROPOSED / NOT EXECUTED** denotes the next engineering step. Do not treat the earlier chronological diagnostic report (Appendix A) as the current system state: it was written *before* the breakthrough in Yahboom UDP connectivity and motor actuation. **Temporal scope:** Sections 1–9 retain an earlier Raspberry Pi/MAVROS investigation for reproducibility. Their older “current”, “not yet complete”, “future”, and “proposed” statements describe the historical snapshot, not the latest UTM/no-Raspberry-Pi test documented immediately below. Appendix A remains an even earlier archival report.
+
+
+## Current verified result — 1 November 2026 (read this before the historical handover)
+
+### Milestones and boundaries
+
+- **VERIFIED — manual actuation:** Pixhawk Cube Black running ArduRover 4.7.2 calculated independent skid-steering outputs. Through RFD868x telemetry, MAVProxy, a Python bridge, micro-ROS over Wi-Fi, and the Yahboom two-motor controller, the suspended wheels advanced, steered left/right and stopped. This does **not** require the Cube PWM outputs to be wired to the Yahboom motor board.
+- **VERIFIED — mission processing:** A three-waypoint mission (17 m as displayed in ArduDeck) was uploaded to the Cube. The controller entered **AUTO (custom mode 10)**, armed when an EKF GPS position estimate became available, reported a mission waypoint, and generated motor outputs observed by `mavlink_ros2_bridge_motion.py` with `ENABLED=True`. ArduDeck showed waypoint progress, and the operator observed wheel actuation. This is **not** a verified outdoor path-following result: position and waypoint progress on a stationary bench can be affected by GNSS drift.
+- **VERIFIED — alternative control:** A terminal-based WASD program transmitted RC overrides through another MAVProxy UDP output. Manual control response was verified; key-repeat/latency and local motor safety timeout require further work. The manufacturer's USB joystick was also recognized under UTM, but a separate `joy_control` publisher must not compete with the bridge on `/cmd_vel`.
+- **NOT VERIFIED:** free-standing, on-ground waypoint arrival, centimetre-accurate tracking, autonomous obstacle avoidance, micro-ROS motor stop after Wi-Fi disconnection, a tested independent emergency stop, and normal field operation with arming checks and geofence restored.
+
+### Physical connections — current no-Raspberry-Pi experiment
+
+```text
+MacBook (UTM Ubuntu 22.04 ARM64, ROS 2 Humble, ROS_DOMAIN_ID=40)
+  FT232R USB UART passed through UTM -> /dev/ttyUSB0 -> RFD868x ground radio
+     <--- wireless MAVLink telemetry --->
+  RFD868x vehicle radio -> Cube Black TELEM1 (ArduRover 4.7.2)
+                         Cube Black GPS1 <- Here2 GPS
+                         Cube Black USB <- Yahboom controller USB supply (power)
+
+UTM: MAVProxy 57600 baud -> local UDP 14551 -> Python MAVLink-to-ROS 2 bridge
+       -> ROS 2 /cmd_vel -> UDP micro-ROS Agent :8090 -> Wi-Fi -> Yahboom ESP32
+       -> two motor drivers / wheels
+
+MAVProxy -> 192.168.1.57:14550 -> ArduDeck on Mac (UDP Listen/Server)
+MAVProxy -> 127.0.0.1:14552 -> terminal WASD MAVLink client (optional)
+```
+
+**Power vs control:** The Cube's USB cable to the Yahboom controller was used for power in the observed setup; **the Cube's servo outputs were not wired to the motor drivers**. Do not infer that powering the Cube over USB is an independently verified or redundant field-power design. Check power quality, isolation, and a suitable dedicated supply before deployment. Device names and LAN addresses are environment-specific.
+
+### UTM/micro-ROS setup and essential checks (VERIFIED)
+
+The V2 ESP32 was configured for a micro-ROS UDP Agent at **`192.168.1.52:8090`**, **`ROS_DOMAIN_ID=40`**. The desktop **JoystickControl** launcher was observed starting `micro_ros_agent`, `joy_node` and `joy_control_node`. Its joystick node is useful for manual testing, but conflicts with the autopilot bridge when both publish `/cmd_vel`. Once the agent has started, terminate only the joystick publishing processes (not the Agent) before relying on the bridge; verify `Publisher count: 0`, `Subscription count: 1` before starting the bridge.
+
+```bash
+export ROS_DOMAIN_ID=40
+source /opt/ros/humble/setup.bash
+ros2 node list
+ros2 topic info /cmd_vel -v
+ros2 topic echo /battery --once
+# Observed in this UTM run: /micro_ros_task_node subscribing to /cmd_vel
+# and /battery publishing approximately 10.89 (likely volts).
+```
+
+Pass the USB joystick controller and the **FT232R USB UART radio adapter** into Ubuntu using UTM's **Virtual Machine → USB Devices** menu and approve the macOS permissions. The USB joystick is optional when using terminal WASD; the RFD868x USB serial adapter is required for the documented MAVProxy radio link. Confirm `/dev/ttyUSB0` before launching MAVProxy (its device assignment may change after unplugging/replugging).
+
+### MAVProxy and ArduDeck — observed command line
+
+```bash
+mavproxy.py \
+  --master=/dev/ttyUSB0,57600 \
+  --source-system=254 \
+  --out=udp:192.168.1.57:14550 \
+  --out=udp:127.0.0.1:14551 \
+  --out=udp:127.0.0.1:14552
+```
+
+The last UDP port is **14552** (not `14552c`, a typographical error in early notes). MAVProxy detected vehicle **system 1/component 1** and acquired a heartbeat. In **ArduDeck**, select ArduPilot/MAVLink, **UDP → Listen (Server) → local port 14550**, then connect. MAVProxy and ArduDeck share the FCU telemetry through the RFD868x pair. Avoid connecting multiple independent applications directly to the same local receiving UDP socket.
+
+### The working PWM-to-ROS 2 bridge
+
+- Script: `~/mavlink_ros2_bridge_motion.py` in Ubuntu UTM; receive `SERVO_OUTPUT_RAW` and `HEARTBEAT` from `udpin:127.0.0.1:14551`; publish `geometry_msgs/msg/Twist` on `/cmd_vel` at ~10 Hz.
+- Confirmed Cube output mapping: `SERVO1_FUNCTION=73` (**Throttle Left**), `SERVO3_FUNCTION=74` (**Throttle Right**); neutral output around **1500 µs**. Previous historical values 26/70 reflect an *earlier configuration* and must not be re-applied blindly.
+- Experimental conversion constants in the test script: `PWM_CENTER=1500`, `PWM_SPAN=500`, `NOMINAL_SPEED=0.40 m/s` (assumed calibration), `WHEEL_SEPARATION=0.22 m` (provisional), `MAX_LINEAR=0.08 m/s`, `MAX_ANGULAR=0.30 rad/s`, `HEARTBEAT_TIMEOUT=2.0 s`, `SERVO_TIMEOUT=0.6 s`, `TEST_DURATION=180.0 s` (unless edited locally). Physical ground speed and exact wheelbase remain uncalibrated.
+- The first version allowed `MANUAL_MODE=0` only; **the proven later experiment enabled `AUTO_MODE=10` as well**. The gating expression must preserve all safety conditions for *both* modes:
+
+```python
+MANUAL_MODE = 0
+AUTO_MODE = 10
+
+enabled = (
+    self.armed
+    and self.mode in (MANUAL_MODE, AUTO_MODE)
+    and heartbeat_ok
+    and servo_ok
+    and within_test
+)
+```
+
+- `HOLD` (mode 4), disarming, stale heartbeat, stale servo telemetry or expiry of `TEST_DURATION` should cause this experimental bridge to publish zero. **A zero sent from Ubuntu cannot protect against lost Wi-Fi after a prior nonzero command**: the ESP32-side watchdog or independent motor-power cutoff remains required.
+- Python run command:
+
+```bash
+export ROS_DOMAIN_ID=40
+source /opt/ros/humble/setup.bash
+python3 ~/mavlink_ros2_bridge_motion.py
+# In a second terminal: ros2 topic hz /cmd_vel
+# Observed: approximately 10 Hz
+```
+
+### Relevant parameters — observations across the experiments
+
+| Parameter | Latest recorded value | Scope / caution |
+|---|---:|---|
+| `SERVO1_FUNCTION` | `73` | Skid-steer left; verified in later log |
+| `SERVO3_FUNCTION` | `74` | Skid-steer right; verified in later log |
+| `RCMAP_ROLL` | `1` | Steering RC channel |
+| `RCMAP_THROTTLE` | `3` | Throttle RC channel |
+| `PILOT_STEER_TYPE` | `0` | Observed |
+| `MAV_GCS_SYSID` | `254` | Observed; MAVProxy `--source-system=254` |
+| `RC_OVERRIDE_TIME` | `3.0` | Observed in manual RC tests |
+| `RC_OPTIONS` | `32` | Observed; interpret according to current firmware |
+| `FS_ACTION` | `2` | Observed after change in MAVProxy |
+| `FS_GCS_ENABLE` | `1` | Observed after change; prior 0 is historical |
+| `FS_TIMEOUT` | `1.5` | Observed |
+| `FENCE_ENABLE` | `0` temporarily | Disabled for bench tests following unintended RTL; restore and validate correct field fence |
+| `FENCE_ACTION` | `1` | At fence troubleshooting before temporary disable |
+| `FENCE_TYPE` | `6` | Circular and polygon geofences on Rover |
+| `OA_TYPE` | `2` | Dijkstra in earlier navigation tests; **not** LiDAR obstacle avoidance |
+| `ARMING_SKIPCHK` | `1048062` | User-reported experimental skip-check bitmask; **not safe as a field default** |
+
+The exact *present* parameter set should be exported from the physical FCU before replication. **Arming checks were deliberately skipped in the experiment**; do not present this as a field-ready configuration. Correct GPS/EKF, compass, power, failsafe and fence issues and re-enable appropriate pre-arm checks before outdoor autonomous motion. Previous `ARMING_CHECK` missing-value investigations belong to the older firmware-parameter snapshot.
+
+Read-only verification in MAVProxy:
+
+```text
+param show SERVO1_FUNCTION
+param show SERVO3_FUNCTION
+param show MAV_GCS_SYSID
+param show FS_GCS_ENABLE
+param show FENCE_ENABLE
+param show ARMING_SKIPCHK
+param show WP_SPEED
+param show CRUISE_SPEED
+param show CRUISE_THROTTLE
+param show ATC_ACCEL_MAX
+param show MOT_SLEWRATE
+param show WP_RADIUS
+```
+
+The six navigation/speed parameters above were **requested but their live values were not yet supplied**. Do not invent them. `WP_SPEED` sets the target speed in AUTO but the Python bridge also caps commanded linear speed to `MAX_LINEAR=0.08 m/s` and yaw speed to `MAX_ANGULAR=0.30 rad/s`; both can limit the test speed. The orange shaded polygon in ArduDeck appeared as mission/survey planning geometry; do not interpret it as a LiDAR obstacle or a verified safety fence solely from its appearance.
+
+### Reproduce the bench AUTO mission (not a field-deployment checklist)
+
+1. **Keep the wheels suspended, cutting tools disconnected, and motor power cutoff within reach.** Connect the Here2 to Cube `GPS1`, vehicle RFD868x to Cube `TELEM1`, and power the Cube as tested. Start the V2 ESP32 with its Wi-Fi micro-ROS agent destination/domain configured as above.
+2. In Mac/UTM, pass the FT232R USB UART adapter and optional joystick USB device to the VM. Start **JoystickControl** to launch the Agent; verify `/micro_ros_task_node` and `/cmd_vel`, then stop competing `joy_control` and `joy_node` processes while keeping the Agent active.
+3. Launch MAVProxy with the complete three-output command above. Confirm Pixhawk heartbeat, `HOLD`, and healthy GPS/EKF status; wait for a valid position estimate.
+4. Connect ArduDeck via **UDP Listen/Server `14550`**; back up any mission, upload a small waypoint mission, and verify the upload succeeded. The observed example contained **three waypoints** and ArduDeck displayed **17 m** total.
+5. Run `mavlink_ros2_bridge_motion.py` with AUTO included in its allowed-mode gate and with a fresh test window; verify `ros2 topic info /cmd_vel -v` has only this bridge as an active publisher. Start disarmed and confirm neutral PWM.
+6. When safe for the **suspended-wheel bench test**, select **AUTO** (not MANUAL to follow waypoints); ArduRover requires a valid position estimate before arming AUTO. Arm only after checking status; the observed record included `EKF3 ... origin set`, `... using GPS`, `Mission: 1 WP`, and `COMPONENT_ARM_DISARM: ACCEPTED`. Observe the bridge log for `ARM=True MODE=10 ... ENABLED=True` and differential PWM activity.
+7. To end the experiment, command **HOLD**, **DISARM**, and verify actual wheel stop; if wheels do not stop, disconnect motor power. Do not treat an ArduDeck waypoint indicator as proof that a suspended rover travelled the route.
+
+**Manual intervention:** switching from AUTO to MANUAL and sending tested RC commands can provide supervised steering control, but the experimental terminal WASD script does **not** automatically override an AUTO mission just because a key is pressed. A joystick connected directly to Yahboom may compete with the bridge at `/cmd_vel` and is not an independently validated emergency-stop mechanism. For real-world safety, prioritize an independent stop and explicit command-source arbitration. In the bench WASD experiments the extra UDP endpoint `127.0.0.1:14552` was used with `rover_keyboard.py` (W/A/S/D, `+`/`-` speed levels, Space neutral, Q quit); its per-key hold time was increased from `KEY_TIMEOUT=0.35` to approximately `0.8 s` by user choice.
+
+### Current next steps
+
+1. Verify **ESP32/local motor watchdog**, independent physical stop, and defined command arbitration; test all loss-of-link cases.
+2. Reinstate relevant **arming checks and geofencing**, calibrate GPS/compass/EKF and ground speed, and validate motor direction, stopping distance and actual `WP_SPEED` vs ROS bridge saturation.
+3. In controlled open terrain with personnel clear, validate actual arrival at a short waypoint route; keep a reliable independent stop.
+4. Integrate ROS 2 LiDAR `/scan` to ArduRover through an appropriate MAVLink proximity interface (e.g. `OBSTACLE_DISTANCE`), then test supported avoidance (BendyRuler in Rover, if configured) separately. No obstacle bypass with this architecture has yet been demonstrated.
+
+**Companion reports already linked below:**
+- [Illustrated autonomous mission quick start](Quick_Start_Autonomous_Mission_with_Pixhawk_Cube_Black_and_Yahboom_MicroROS_V2_No_Raspberry_Pi.md)
+- [AUTO-mode milestone and future LiDAR integration](MISSION_AUTO_LIDAR_NEXT_STEPS.md)
+- [No-Raspberry-Pi MAVLink → micro-ROS integration](MicroRos_V2_Pixhawk_connection_without_Raspberry_Pi.md)
+
+---
 
 ## Updates
 ### 2026-11-01 — Quick Start: Autonomous Mission with Pixhawk Cube Black and Yahboom MicroROS V2 (No Raspberry Pi)
@@ -41,9 +200,9 @@ The complete investigation includes experimental results, troubleshooting steps,
 
 **[Read the full technical report →](ARBOREON_MAVROS_RC_Failsafe_Investigation_2026-10-29_EN.md)**
 
-**Next milestone:** Validate differential PWM outputs and supervised motor actuation with the Yahboom MicroROS V2 platform.
+**Historical next milestone (30 October, now achieved on the UTM/no-Pi test bench):** Validate differential PWM outputs and supervised motor actuation with the Yahboom MicroROS V2 platform. **Current next milestone:** validate safe *physical ground* waypoint following and LiDAR-based obstacle response.
 
-## 1. Current outcome in one page
+## 1. Historical outcome as of 29 October (superseded by the 1 November update above)
 
 ### What actually works (VERIFIED)
 
@@ -58,7 +217,7 @@ The complete investigation includes experimental results, troubleshooting steps,
 9. The MAVROS parameter pull succeeded: **876 ArduPilot parameters received**. Original wheel output functions are `SERVO1_FUNCTION=26` (ground steering) and `SERVO3_FUNCTION=70` (throttle). Their PWM ranges are `1100–1900 µs`, neutral `1500 µs`, reversals `0`.
 10. `/mavros_router/add_endpoint` provided a link to **ArduDeck Beta 1.1** running on MacBook **192.168.1.57**, using UDP **14550**. User explicitly confirmed **connection succeeded**, and screenshot showed live `HOLD`, `DISARMED`, heading **22°**, speed **0.0 m/s**, no GPS fix, `UDP :14550` connected.
 
-### What is NOT yet complete
+### What was NOT yet complete at that historical handover (subsequently updated)
 
 - No verified ROS node currently translates Cube's actual servo output `/mavros/rc/out` into Yahboom `/cmd_vel`.
 - `SERVO1_FUNCTION=73` (Throttle Left) and `SERVO3_FUNCTION=74` (Throttle Right) were **proposed but not applied**.
@@ -66,7 +225,7 @@ The complete investigation includes experimental results, troubleshooting steps,
 - `FS_GCS_ENABLE=0`; the micro-ROS/Wi-Fi loss stop behavior is not proven. The present `FS_THR_ENABLE=1` cannot be assumed to protect the ESP32 wireless motor commands.
 - The Mac application is **ArduDeck**, not Mission Planner. It offers Mission Planning, but the route editor and mission uploading were not completed.
 
-## 2. Logical and physical architecture
+## 2. Historical Raspberry Pi architecture (not the current UTM/no-Pi test path)
 
 ```text
                                   Home access point
@@ -111,7 +270,7 @@ Future intended path: Cube Rover servo outputs -> MAVROS /mavros/rc/out
 | ArduDeck connection | UDP `192.168.1.57:14550` | Local receive port on Mac. |
 | MAVROS router endpoint | `udp://0.0.0.0:14555@192.168.1.57:14550` | Add as `TYPE_GCS=1`. |
 
-## 3. Reproducible setup: startup order
+## 3. Historical Raspberry Pi setup: startup order
 
 ### 3.1 Host network and persistent Wi-Fi priorities (VERIFIED/RECORDED)
 
@@ -515,7 +674,7 @@ In Client (Connect) view, `192.168.1.1` appeared as a default host; this is the 
 
 **Final screenshot evidence:** Green `UDP :14550`; `HOLD`; `DISARMED`; heading `22°`; speed `0.0 m/s`; throttle `0%`; GPS `No Fix`, satellites `0`; HDOP/VDOP `100.0`; position latitude `0.000000°`, longitude `0.000000°`; altitude display approximately `-5m` (not valid navigational altitude with no GPS fix). The map's displayed satellite imagery was **not** proof of vehicle location. The UI exposed **Mission Planning** via Quick Launch and a map/planning icon.
 
-## 5. Attempting a tiny Mission Planning route: why it stopped here
+## 5. Historical mission-planning attempt: why it stopped at that stage
 
 The operator intended a route of only a few **centimeters**, with wheels safely suspended. This is an appropriate early *command-chain bench test*, but **not a meaningful standalone GPS waypoint navigation test**:
 
@@ -527,7 +686,7 @@ The operator intended a route of only a few **centimeters**, with wheels safely 
 
 **What was done:** ArduDeck connection, FCU telemetry inspection, read-only parameter analysis, discovery of Mission Planning entry point. **What was NOT done:** Mission Planner installation, actual waypoint creation/upload, `AUTO` execution, Pixhawk-led motor movement, route completion.
 
-## 6. Engineering plan to resume with minimum repetition
+## 6. Historical engineering plan (several stages now achieved on the UTM bench)
 
 ### Stage A — preserve this working communication chain
 
