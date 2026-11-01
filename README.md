@@ -8,7 +8,7 @@
 > **Evidence conventions.** **VERIFIED** denotes a user-observed measurement, log or outcome from the session. **RECONSTRUCTED** denotes a functional example derived from the verified behavior when the exact original source is not retained here. **PROPOSED / NOT EXECUTED** denotes the next engineering step. Do not treat the earlier chronological diagnostic report (Appendix A) as the current system state: it was written *before* the breakthrough in Yahboom UDP connectivity and motor actuation.
 
 ## Updates
-### 2026-11-01 — Extension 02 — Autonomous Mission Mode (AUTO): Cube Black → RFD868x → ROS 2 → Yahboom MicroROS V2
+### 2026-11-01 — Quick Start: Autonomous Mission with Pixhawk Cube Black and Yahboom MicroROS V2 (No Raspberry Pi)
 
 **[Read document →](Quick_Start_Autonomous_Mission_with_Pixhawk_Cube_Black_and_Yahboom_MicroROS_V2_No_Raspberry_Pi.md)**
 
