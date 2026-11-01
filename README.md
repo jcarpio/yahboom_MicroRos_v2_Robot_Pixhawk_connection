@@ -168,6 +168,12 @@ The six navigation/speed parameters above were **requested but their live values
 
 ## Updates
 
+### 2026-11-01 — Arboreon Mobile HotSpot Field Testing
+
+**[Go to document →](ARBOREON_MOBILE_HOTSPOT_FIELD_TESTING.md)**
+
+
+
 
 ### 2026-11-01 — HuggingFace UTM Ubuntu 22.04 Arm64 Image
 
